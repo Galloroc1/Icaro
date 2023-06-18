@@ -1,10 +1,16 @@
-
 class Config:
-    compute_type = 'single'
-
-    def __init__(self):
-        pass
+    ROLE = None
+    NAME = None
+    COM_MAP = None
 
     @classmethod
-    def init(cls, compute_type):
-        cls.compute_type = compute_type
+    def init(cls,
+             role,
+             name,
+             com_map,
+
+             ):
+        cls.ROLE = role
+        cls.NAME = name
+        cls.COM_MAP = com_map
+        return cls
