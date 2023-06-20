@@ -10,14 +10,8 @@ if __name__ == '__main__':
 
     data = toTensor(np.random.random_sample((8, 2)))
     y = toTensor(np.random.random_sample((8, 1)))
-    w = toTensor(np.random.random_sample((2, 1)))
-    b = toTensor(np.random.random_sample((1, 1)))
-    pred = data.dot(w) + b
-
     alice_pred = toTensor(None, who="alice", dname='pred')
-
-    grad = (alice_pred + pred)
-
-    # grad.send("host", dname='grad')
+    grad = (y-alice_pred).mean()
+    grad.send("host", dname='grad')
 
 
