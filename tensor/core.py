@@ -2,18 +2,20 @@ import dask
 from dask.array.core import Array
 import math
 import sys
-from .paillier_func import raw_encrypt, \
+from paillier_func import raw_encrypt, \
     get_random_lt_n, \
     get_mantissa, \
     powmod, \
     mulmod, invert, l_function, crt_func, raw_add
-from .paillier_single import EncryptedNumber, generate_paillier_keypair
+from paillier_single import EncryptedNumber, generate_paillier_keypair
 import dask.array as da
 import numpy as np
 from dask.array.reductions import reduction
-from communication.core import Communicate
-from dask import delayed
+import logging
+
+# from communication.core import Communicate
 pub, qub = generate_paillier_keypair()
+logging.basicConfig(level=logging.WARNING)
 
 
 class Tensor(Array):
@@ -23,7 +25,8 @@ class Tensor(Array):
     n = pub.n
     nsquare = n ** 2
     max_int = n // 3 - 1
-    com = Communicate()
+
+    # com = Communicate()
 
     def __new__(cls, dask, name, chunks, dtype=None, meta=None, shape=None, is_encrypt=False):
         obj = super().__new__(cls, dask=dask, name=name, chunks=chunks, meta=meta, dtype=dtype, shape=shape)
@@ -130,7 +133,7 @@ class Tensor(Array):
             raise ValueError('p and q have to be different')
 
     def decrypt(self):
-        if self.placeholder:
+        if self.is_encrypt:
             return self
         self.decrypt_init(qub.n, qub.p, qub.q)
         return self.decode(self.decrypt_encoded(qub.n, qub.p, qub.q))
@@ -251,10 +254,15 @@ class Tensor(Array):
         if not self.is_encrypt and other.is_encrypt:
             return other.__mul__(self)
 
-    def sum(self, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
+    def sum(self, axis=None, dtype=None, keepdims=True, split_every=None, out=None):
         if self.is_encrypt:
-            # todo : rechunk , mutil dim
-            obj = sums(self)
+            assert keepdims == True, ValueError("\nI'm sorry about that error, keepdims must be Ture now, "
+                                                "we will optimize it.\n but not now .......")
+            if axis == 0:
+                logging.warning("\nYou try to use sum(axis=0) on the ciphertext tensor\n"
+                                "it won't work because axis 0 is used to put cip and exp,"
+                                " and we will return the original value to you")
+            obj = sums(self, axis=axis, keepdims=True)
             obj = array_to_tensor(obj, is_encrypt=True)
             return obj
         else:
@@ -290,7 +298,7 @@ def toTensor(x,
              dname=None):
     if x is None:
         result = array_to_tensor(da.empty(shape=(0, 0))).get(who=who, dname=dname)
-        result = array_to_tensor(da.from_array(result['data'], chunks=1),is_encrypt=result['is_encrypt'])
+        result = array_to_tensor(da.from_array(result['data'], chunks=1), is_encrypt=result['is_encrypt'])
         return result
 
     if isinstance(x, np.ndarray):
@@ -309,44 +317,34 @@ def toTensor(x,
         return array_to_tensor(x)
 
 
-def sums(array, axis=None):
+def sums(array, axis=None, keepdims=True):
+    array = array.rechunk(chunks=(2, 4, 4))
     dtype = getattr(np.zeros(1, dtype=array.dtype).sum(), "dtype", object)
-    axis = (1,2)
     array = reduction(x=array,
-                      chunk=sum_nothing,
-                      aggregate=sum_after,
+                      chunk=sum_chunk,
+                      aggregate=sum_chunk,
                       axis=axis,
                       dtype=dtype,
-                      keepdims=False,
+                      keepdims=keepdims,
                       split_every=None,
                       out=None
                       )
     return array
 
 
-def sum_after(array, axis=None, keepdims=False, ):
-    # 递归聚合
+def sum_chunk(array, axis=None, keepdims=True, ):
     try:
+        axis = tuple(filter(lambda x: x > 0, axis))
         arrays = EncryptedNumber(Tensor.n, array[0], array[1]).toArray()
-        arrays = np.sum(arrays, (0, 1))
-        arrays = np.array([arrays.ciphertext(True), arrays.exponent]).reshape((2, 1))
-        # print(arrays)
-
+        arrays = arrays.reshape((1,) + arrays.shape)
+        arrays = np.sum(arrays, axis, keepdims=keepdims)
+        arrays = np.frompyfunc(lambda x: (x.ciphertext(True), x.exponent), 1, 2)(arrays)
+        arrays = np.concatenate(arrays, axis=0)
     except:
-        # arrays = np.empty(tuple([0]*(len(array.shape))))
         arrays = np.empty((0,))
 
     return arrays
 
 
-def sum_nothing(array, axis=None,
-                dtype=None,
-                keepdims=False,
-                split_every=None,
-                out=None):
-    return np.empty((0, 0, 0))
-    # return np.empty(shape=array.shape)
-
-
-def from_other():
-    pass
+data = toTensor(np.random.random_sample((4, 4)), ).encrypt()
+print(data.sum(axis=0).compute().shape)

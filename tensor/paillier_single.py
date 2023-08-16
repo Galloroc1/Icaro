@@ -3,7 +3,7 @@ import numpy as np
 import math
 import sys
 import random
-from .paillier_func import powmod, mulmod, invert, getprimeover
+from paillier_func import powmod, mulmod, invert, getprimeover
 
 
 def generate_paillier_keypair(n_length=1024):
