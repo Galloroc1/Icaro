@@ -301,6 +301,7 @@ class EncryptedNumber(object):
         return np.frompyfunc(EncryptedNumber, 3, 1)(self.n, self.__ciphertext, self.exponent)
 
 
+
 class EncodedNumber(object):
     BASE = 16
     LOG2_BASE = math.log(BASE, 2)
@@ -379,3 +380,7 @@ class EncodedNumber(object):
         factor = np.power(self.BASE, self.exponent - new_exp)
         new_enc = self.encoding * factor % self.n
         return self.__class__(self.n, new_enc, new_exp)
+
+data = np.random.random_sample((2,2))
+p,q = generate_paillier_keypair()
+p.encrypt(data)

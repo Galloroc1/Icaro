@@ -1,4 +1,3 @@
-import dask
 from dask.array.core import Array
 import math
 import sys
@@ -12,6 +11,7 @@ import dask.array as da
 import numpy as np
 from dask.array.reductions import reduction
 import logging
+from dask.array import map_blocks
 
 # from communication.core import Communicate
 pub, qub = generate_paillier_keypair()
@@ -53,7 +53,10 @@ class Tensor(Array):
         encoding, exponent = self.encode(self.n)
         ciphertext = raw_encrypt(self.n, self.nsquare, self.max_int, encoding, 1)
         ciphertext = self.obfuscate(ciphertext)
-        return array_to_tensor(da.stack([ciphertext, exponent], axis=0), is_encrypt=True)
+        # print(dir(da.array([1,2,3])))
+        r = da.stack([ciphertext, exponent], axis=0)
+        r = r.rechunk((2,)+self.chunksize)
+        return array_to_tensor(r, is_encrypt=True)
 
     def obfuscate(self, ciphertext):
         r = get_random_lt_n(self.n)
@@ -205,6 +208,7 @@ class Tensor(Array):
         return array_to_tensor(da.stack([sum_ciphertext, min_exp], axis=0), is_encrypt=True)
 
     def __add__(self, other):
+        print("pass add")
         """Add an int, float, `EncryptedNumber` or `EncodedNumber`."""
         if self.is_encrypt and (isinstance(other, float) or isinstance(other, int)):
             other = toTensor(da.full(self.shape[1:], fill_value=other))
@@ -256,7 +260,7 @@ class Tensor(Array):
 
     def sum(self, axis=None, dtype=None, keepdims=True, split_every=None, out=None):
         if self.is_encrypt:
-            assert keepdims == True, ValueError("\nI'm sorry about that error, keepdims must be Ture now, "
+            assert keepdims is True, ValueError("\nI'm sorry about that error, keepdims must be Ture now, "
                                                 "we will optimize it.\n but not now .......")
             if axis == 0:
                 logging.warning("\nYou try to use sum(axis=0) on the ciphertext tensor\n"
@@ -269,17 +273,23 @@ class Tensor(Array):
             return array_to_tensor(super(Tensor, self).sum(axis=axis))
 
     def dot(self, other):
-        return array_to_tensor(da.dot(self, other))
+        if all(not x.is_encrypt for x in [self,other]):
+            return array_to_tensor(da.dot(self, other))
 
-    def send(self, who, dname):
-        self.com.send(who, dname=dname, data=self.compute(), is_encrypt=self.is_encrypt)
+        (a, b) = (self,other) if self.is_encrypt else (other,self)
+        z = map_blocks(dot_single, a, dtype=object)
 
-    def get(self, who, dname):
-        result = self.com.get(who, dname)
-        return result
+        return z
 
 
-def array_to_tensor(array, is_encrypt=False, n=None):
+def dot_single(a):
+    try:
+        arrays = EncryptedNumber(Tensor.n, a[0], a[1]).toArray()
+    except:
+        arrays = np.empty(a.shape)
+    return arrays
+
+def array_to_tensor(array, is_encrypt=False):
     tensor = Tensor(array.dask, name=array.name, chunks=array.chunks, dtype=array.dtype, meta=array._meta,
                     shape=array.shape, is_encrypt=is_encrypt)
     return tensor
@@ -342,9 +352,124 @@ def sum_chunk(array, axis=None, keepdims=True, ):
         arrays = np.concatenate(arrays, axis=0)
     except:
         arrays = np.empty((0,))
-
     return arrays
 
+import numbers
+import warnings
 
-data = toTensor(np.random.random_sample((4, 4)), ).encrypt()
-print(data.sum(axis=0).compute().shape)
+import tlz as toolz
+import numpy as np
+from dask import base, utils
+from dask.blockwise import blockwise as core_blockwise
+from dask.delayed import unpack_collections
+from dask.highlevelgraph import HighLevelGraph
+from dask.array import from_array,Array
+from collections.abc import Iterable
+from numbers import Integral
+from dask.array.core import new_da_object
+from dask.utils import  derived_from
+from dask.utils import Dispatch
+from dask.array import blockwise
+from dask.array.dispatch import tensordot_lookup
+def dot_(a, b, axes):
+    a = EncryptedNumber(Tensor.n, a[0], a[1]).toArray()
+    r = np.dot(a,b)
+    # r = np.tensordot(a,b,axes=axes)
+    a = np.vectorize(lambda x:(x.ciphertext(True),x.exponent))(r)
+    cip,exp = np.expand_dims(a[0],axis=0),np.expand_dims(a[1],axis=0)
+    a = np.concatenate([cip,exp],axis=0)
+    # a = np.tensordot(a,b,axes=axes)
+    return a
+
+
+def _tensordot(a, b, axes, is_sparse):
+    x = max([a, b], key=lambda x: x.__array_priority__)
+    # tensordot = tensordot_lookup.dispatch(type(x))
+    tensordot = dot_
+    # print(tensordot.__code__)
+    x = tensordot(a, b, axes=axes)
+    if is_sparse and len(axes[0]) == 1:
+        return x
+    else:
+        ind = [slice(None, None)] * x.ndim
+        for a in sorted(axes[0]):
+            ind.insert(a, None)
+        x = x[tuple(ind)]
+        return x
+
+
+def _tensordot_is_sparse(x):
+    is_sparse = "sparse" in str(type(x._meta))
+    if is_sparse:
+        # exclude pydata sparse arrays, no workaround required for these in tensordot
+        is_sparse = "sparse._coo.core.COO" not in str(type(x._meta))
+    return is_sparse
+
+
+@derived_from(np)
+def tensordot(lhs, rhs, axes=2):
+    if not isinstance(lhs, Array):
+        lhs = from_array(lhs)
+    if not isinstance(rhs, Array):
+        rhs = from_array(rhs)
+
+    if isinstance(axes, Iterable):
+        left_axes, right_axes = axes
+    else:
+        left_axes = tuple(range(lhs.ndim - axes, lhs.ndim))
+        right_axes = tuple(range(0, axes))
+    if isinstance(left_axes, Integral):
+        left_axes = (left_axes,)
+    if isinstance(right_axes, Integral):
+        right_axes = (right_axes,)
+    if isinstance(left_axes, list):
+        left_axes = tuple(left_axes)
+    if isinstance(right_axes, list):
+        right_axes = tuple(right_axes)
+    is_sparse = _tensordot_is_sparse(lhs) or _tensordot_is_sparse(rhs)
+    if is_sparse and len(left_axes) == 1:
+        concatenate = True
+    else:
+        concatenate = False
+    dt = np.promote_types(lhs.dtype, rhs.dtype)
+    left_index = list(range(lhs.ndim))
+    right_index = list(range(lhs.ndim, lhs.ndim + rhs.ndim))
+    out_index = left_index + right_index
+
+    adjust_chunks = {}
+    for l, r in zip(left_axes, right_axes):
+        out_index.remove(right_index[r])
+        right_index[r] = left_index[l]
+        if concatenate:
+            out_index.remove(left_index[l])
+        else:
+            adjust_chunks[left_index[l]] = lambda c: 1
+    intermediate = blockwise(
+        _tensordot,
+        out_index,
+        lhs,
+        left_index,
+        rhs,
+        right_index,
+        dtype=dt,
+        concatenate=concatenate,
+        adjust_chunks=adjust_chunks,
+        axes=(left_axes, right_axes),
+        is_sparse=is_sparse,
+    )
+    if concatenate:
+        return intermediate
+    else:
+        return intermediate.sum(axis=left_axes)
+
+
+@derived_from(np, ua_args=["out"])
+def dot(a, b):
+    return tensordot(a, b, axes=((a.ndim - 1,), (b.ndim - 2,)))
+
+#
+# data = toTensor(np.random.random_sample((2,3,4))).encrypt()
+# data2 = toTensor(np.random.random_sample((4,2)))
+# data = dot(data,data2)
+#
+# print(data.compute().shape)
