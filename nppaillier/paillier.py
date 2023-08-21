@@ -1,9 +1,8 @@
-from dask.array.core import Array
 import numpy as np
 import math
-import sys
 import random
-from paillier_func import powmod, mulmod, invert, getprimeover
+import sys
+from nppaillier.function import powmod, mulmod, invert, getprimeover
 
 
 def generate_paillier_keypair(n_length=1024):
@@ -187,7 +186,7 @@ class EncryptedNumber(object):
 
         # In order to add two numbers, their exponents must match.
         a, b = self, other
-        if isinstance(a.exponent, Array):
+        if isinstance(a.exponent, np.ndarray):
             mins = np.minimum(a.exponent, b.exponent)
 
             if np.any(a.exponent != mins):
@@ -232,7 +231,7 @@ class EncryptedNumber(object):
         # In order to add two numbers, their exponents must match.
         a, b = self, encoded
 
-        if isinstance(a.exponent, Array):
+        if isinstance(a.exponent, np.ndarray):
             mins = np.minimum(a.exponent, b.exponent)
             if np.any(a.exponent != mins):
                 a = self.decrease_exponent_to(mins)
@@ -244,8 +243,8 @@ class EncryptedNumber(object):
                 a = self.decrease_exponent_to(b.exponent)
             elif a.exponent < b.exponent:
                 b = b.decrease_exponent_to(a.exponent)
-        # Don't bother to salt/obfuscate in a basic operation, do it
-        # just before leaving the computer.
+
+        # todo : some problem
         encrypted_scalar = PaillierPublicKey(a.n).raw_encrypt(b.encoding, 1)
         sum_ciphertext = a._raw_add(a.ciphertext(False), encrypted_scalar)
         return EncryptedNumber(a.n, sum_ciphertext, a.exponent)
@@ -301,13 +300,12 @@ class EncryptedNumber(object):
         return np.frompyfunc(EncryptedNumber, 3, 1)(self.n, self.__ciphertext, self.exponent)
 
 
-
 class EncodedNumber(object):
     BASE = 16
     LOG2_BASE = math.log(BASE, 2)
     FLOAT_MANTISSA_BITS = sys.float_info.mant_dig
 
-    def __init__(self, n, encoding: Array, exponent: Array):
+    def __init__(self, n, encoding, exponent):
         self.n = n
         self.max_int = n // 3 - 1
         self.encoding = encoding
@@ -381,6 +379,3 @@ class EncodedNumber(object):
         new_enc = self.encoding * factor % self.n
         return self.__class__(self.n, new_enc, new_exp)
 
-data = np.random.random_sample((2,2))
-p,q = generate_paillier_keypair()
-p.encrypt(data)

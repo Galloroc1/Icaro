@@ -1,6 +1,6 @@
 import socket
 import pickle
-from config import Config
+from task.config import Config
 
 
 class Communicate:
