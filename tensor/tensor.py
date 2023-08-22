@@ -5,14 +5,15 @@ from nppaillier.function import \
     get_mantissa, \
     powmod, \
     mulmod, invert, l_function, crt_func
-from task.config import pub,qub
-from nppaillier.dafunction import raw_encrypt,raw_add
+from task.config import pub, qub
+from nppaillier.dafunction import raw_encrypt, raw_add
 import dask.array as da
 import logging
 import numpy as np
-from dask.array import Array,reduction
+from dask.array import Array, reduction
 from dask.utils import derived_from
-from tensor.op import sum_chunk,tensordot
+from tensor.op import sum_chunk, tensordot
+from communication.core import Communicate
 
 
 class Tensor(Array):
@@ -37,6 +38,10 @@ class Tensor(Array):
     def __divmod__(self, other):
         return super(Tensor, self).__divmod__(other)
 
+    def __str__(self):
+        r = super(Tensor, self).__str__()
+        return f"type is:{type(self).__name__}\nis encrypted :{self.is_encrypt}\narray information: {r}"
+
     def init_public_key_informathion(self):
         self.nsquare = self.n ** 2
         self.max_int = self.n // 3
@@ -52,7 +57,7 @@ class Tensor(Array):
         ciphertext = raw_encrypt(self.n, self.nsquare, self.max_int, encoding, 1)
         ciphertext = self.obfuscate(ciphertext)
         r = da.stack([ciphertext, exponent], axis=0)
-        r = r.rechunk((2,)+self.chunksize)
+        r = r.rechunk((2,) + self.chunksize)
         return array_to_tensor(r, is_encrypt=True)
 
     def obfuscate(self, ciphertext):
@@ -267,8 +272,11 @@ class Tensor(Array):
     def dot(self, other):
         return dot(self, other)
 
-    def to_others(self, com,who,dname,):
-        com
+    def to_other(self, com: Communicate, dname: str, ):
+        com.send(data=self.compute(), dname=dname, is_encrypt=self.is_encrypt)
+
+    def from_other(self, com: Communicate, dname: str):
+        return com.get(dname=dname)
 
 
 def array_to_tensor(array, is_encrypt=False):
@@ -278,8 +286,7 @@ def array_to_tensor(array, is_encrypt=False):
 
 
 def sums(array, axis=None, keepdims=True):
-    # todo : just for example
-    array = array.rechunk(chunks=(2, 4, 4))
+    array = array.rechunk(chunks=(2,)+array.chunks[1:])
     dtype = getattr(np.zeros(1, dtype=array.dtype).sum(), "dtype", object)
     array = reduction(x=array,
                       chunk=sum_chunk,
@@ -294,9 +301,9 @@ def sums(array, axis=None, keepdims=True):
 
 
 @derived_from(np, ua_args=["out"])
-def dot(a, b):
+def dot(a, b) -> Tensor:
     if not a.is_encrypt and not b.is_encrypt:
-        return array_to_tensor(da.dot(a,b))
+        return array_to_tensor(da.dot(a, b))
 
     if a.is_encrypt and b.is_encrypt:
         raise "0.0"
@@ -304,9 +311,9 @@ def dot(a, b):
     return array_to_tensor(tensordot(a, b, axes=((a.ndim - 1,), (b.ndim - 2,)), right=b.is_encrypt), is_encrypt=True)
 
 
-
-
 def toTensor(x,
+             com=None,
+             dname=None,
              chunks="auto",
              name=None,
              lock=False,
@@ -315,11 +322,11 @@ def toTensor(x,
              getitem=None,
              meta=None,
              inline_array=False,
-             who=None,
-             dname=None):
+             ) -> Tensor:
     if x is None:
-        result = array_to_tensor(da.empty(shape=(0, 0))).get(who=who, dname=dname)
-        result = array_to_tensor(da.from_array(result['data'], chunks=1), is_encrypt=result['is_encrypt'])
+        assert com and dname, print("while x is None, you should send com and dname")
+        result = array_to_tensor(da.empty(shape=(0, 0))).from_other(com, dname=dname)
+        result = array_to_tensor(da.asanyarray(result['data']), is_encrypt=result['is_encrypt'])
         return result
 
     if isinstance(x, np.ndarray):
