@@ -7,11 +7,11 @@ from communication.core import Communicate
 if __name__ == '__main__':
     com = Communicate(role='guest',
                       name="bob",
-                      port=9072,
+                      port=8072,
                       other='alice',
-                      other_port=9082)
+                      other_port=8082)
 
     en_data = toTensor(None,com,dname='dot')
     other = toTensor(np.ones(shape=en_data.shape[1:]))
     data = en_data.dot(other)
-    # data.to_other(com, dname="dot2")
+    data.to_other(com, dname="dot2")
