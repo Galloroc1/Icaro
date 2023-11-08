@@ -13,7 +13,6 @@ import numpy as np
 from dask.array import Array, reduction
 from dask.utils import derived_from
 from tensor.op import sum_chunk, tensordot
-from communication.core import Communicate
 
 
 class Tensor(Array):
@@ -272,11 +271,7 @@ class Tensor(Array):
     def dot(self, other):
         return dot(self, other)
 
-    def to_other(self, com: Communicate, dname: str, ):
-        com.send(data=self.compute(), dname=dname, is_encrypt=self.is_encrypt)
 
-    def from_other(self, com: Communicate, dname: str):
-        return com.get(dname=dname)
 
 
 def array_to_tensor(array, is_encrypt=False):
